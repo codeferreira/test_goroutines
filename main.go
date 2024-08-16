@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"time"
 )
@@ -13,16 +16,34 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(concurrency)
 
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Second)
+		fmt.Fprintln(w, "Hello, client")
+	}))
+
 	for range concurrency {
-		go func() {
+		go func(ctx context.Context) {
 			defer wg.Done()
-			resp, err := http.Get("http://www.google.com")
+
+			req, err := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 			if err != nil {
 				panic(err)
 			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					fmt.Println("Deadline exceeded")
+					return
+				}
+				panic(err)
+			}
 			defer resp.Body.Close()
-			fmt.Println(resp.Status, time.Since(start))
-		}()
+		}(ctx)
 	}
 
 	wg.Wait()
